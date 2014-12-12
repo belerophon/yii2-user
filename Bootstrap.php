@@ -13,6 +13,7 @@ namespace dektrium\user;
 
 use yii\base\BootstrapInterface;
 use yii\web\GroupUrlRule;
+use yii\console\Application as ConsoleApplication;
 
 /**
  * Bootstrap class registers module and user application component. It also creates some url rules which will be applied
@@ -27,49 +28,56 @@ class Bootstrap implements BootstrapInterface
      */
     public function bootstrap($app)
     {
-        if ($app->hasModule('user')) {
-            $identityClass = $app->getModule('user')->manager->userClass;
-        } else {
-            $app->setModule('user', [
-                'class' => 'dektrium\user\Module'
-            ]);
-            $identityClass = 'dektrium\user\models\User';
-        }
-
         /** @var $module Module */
-        $module = $app->getModule('user');
-
-        if ($app instanceof \yii\console\Application) {
-            $module->controllerNamespace = 'dektrium\user\commands';
-        } else {
-            $app->set('user', [
-                'class'           => $module->webUserClass,
+        if ($app->hasModule('user') && ($module = $app->getModule('user')) instanceof Module){
+            foreach ($module->modelMap as $name => $definition) {
+                $class = "dektrium\\user\\models\\" . $name;
+                \Yii::$container->set($class, $definition);
+                if (is_array($definition)) {
+                    $module->modelMap = [$name => $class];
+                }
+                \Yii::$container->set($name . 'Query', function () use ($module, $name) {
+                    return forward_static_call([$module->modelMap[$name], 'find']);
+                });
+            }
+            \Yii::$container->setSingleton(Finder::className(), [
+                'userQuery'    => \Yii::$container->get('UserQuery'),
+                'profileQuery' => \Yii::$container->get('ProfileQuery'),
+                'tokenQuery'   => \Yii::$container->get('TokenQuery'),
+                'accountQuery' => \Yii::$container->get('AccountQuery'),
+            ]);
+            \Yii::$container->set('yii\web\User', [
                 'enableAutoLogin' => true,
                 'loginUrl'        => ['/user/security/login'],
-                'identityClass'   => $identityClass
+                'identityClass'   => $module->modelMap['User'],
             ]);
 
-            $configUrlRule = [
-                'prefix' => $module->urlPrefix,
-                'rules'  => $module->urlRules
+            if ($app instanceof ConsoleApplication) {
+                $module->controllerNamespace = 'dektrium\user\commands';
+            } else {
+                $configUrlRule = [
+                    'prefix' => $module->urlPrefix,
+                    'rules'  => $module->urlRules
+                ];
+
+                if ($module->urlPrefix != 'user') {
+                    $configUrlRule['routePrefix'] = 'user';
+                }
+
+                $app->get('urlManager')->rules[] = new GroupUrlRule($configUrlRule);
+
+                if (!$app->has('authClientCollection')) {
+                    $app->set('authClientCollection', [
+                        'class' => 'yii\authclient\Collection',
+                    ]);
+                }
+            }
+
+            $app->get('i18n')->translations['user*'] = [
+                'class'    => 'yii\i18n\PhpMessageSource',
+                'basePath' => __DIR__ . '/messages',
             ];
-
-            if ($module->urlPrefix != 'user') {
-                $configUrlRule['routePrefix'] = 'user';
-            }
-
-            $app->get('urlManager')->rules[] = new GroupUrlRule($configUrlRule);
-
-            if (!$app->has('authClientCollection')) {
-                $app->set('authClientCollection', [
-                    'class' => 'yii\authclient\Collection',
-                ]);
-            }
         }
-
-        $app->get('i18n')->translations['user*'] = [
-            'class'    => 'yii\i18n\PhpMessageSource',
-            'basePath' => __DIR__ . '/messages',
-        ];
+        
     }
 }
